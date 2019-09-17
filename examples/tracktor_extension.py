@@ -31,7 +31,7 @@ def round_up_to_odd(f):
     """
     return int(np.ceil(f) // 2 * 2 + 1)
 
-def detect_and_draw_contours(frame, thresh, meas_last, meas_now, erosion_dilation_count, min_area = 0, max_area = 10000):
+def detect_and_draw_contours(frame, thresh, meas_last, meas_now, ero_dil_count, n_inds, min_area = 0, max_area = 10000):
     """
     This function detects contours, thresholds them based on area and draws them.
     
@@ -72,7 +72,7 @@ def detect_and_draw_contours(frame, thresh, meas_last, meas_now, erosion_dilatio
 
     i = 0
     
-    if erosion_dilation_count == 0:
+    if ero_dil_count == 0:
         meas_last = meas_now.copy()
     
     del meas_now[:]
@@ -86,9 +86,13 @@ def detect_and_draw_contours(frame, thresh, meas_last, meas_now, erosion_dilatio
             if M['m00'] != 0:
             	cx = M['m10']/M['m00']
             	cy = M['m01']/M['m00']
-            else:
-            	cx = 0
-            	cy = 0
+            else: #if the area of the contour found is zero
+                if n_inds == 1:    #if theres only one animal being tracked take the last known coordinates instead of zeros
+                    cx = meas_last[0][0]
+                    cy = meas_last[0][1]
+                else:
+                    cx = 0
+                    cy = 0
             meas_now.append([cx,cy])
             i += 1
     return final, contours, meas_last, meas_now
@@ -233,20 +237,24 @@ def find_lost_points1(meas_last, meas_now, n_inds):
     lost_points = list of points from meas_last which are considered as lost
     """
     
-    meas_now = np.array(meas_now)
-    meas_last = np.array(meas_last) 
- 
-    dist_matrix = cdist(meas_last, meas_now) 
-    #euclidean distance matrix between contours from last/estimate and current frame 
+    #if 1 animal tracked it has been lost
+    if n_inds == 1:
+        lost_points = meas_last
+    else:  
+        meas_now = np.array(meas_now)
+        meas_last = np.array(meas_last) 
     
-    hi_dis2last = np.argsort(np.min(dist_matrix, axis = 1))[::-1]
-    #find minimum distance for every object in meas_last, sort them ascendingly (np.argsort) and reverse order ([::-1])
+        dist_matrix = cdist(meas_last, meas_now)
+        #euclidean distance matrix between contours from last/estimate and current frame 
     
-    n_discrepance = len(meas_last)-len(meas_now)
-    #contour count difference between frames
+        hi_dis2last = np.argsort(np.min(dist_matrix, axis = 1))[::-1]
+        #find minimum distance for every object in meas_last, sort them ascendingly (np.argsort) and reverse order ([::-1])
     
-    lost_points = np.array(meas_last)[hi_dis2last[0:n_discrepance]] 
-    #take n_discrepance contours from hi_dis2last, which are the putative individuals which were list in the current frame    
+        n_discrepance = len(meas_last)-len(meas_now)
+        #contour count difference between frames
+    
+        lost_points = np.array(meas_last)[hi_dis2last[0:n_discrepance]] 
+        #take n_discrepance contours from hi_dis2last, which are the putative individuals which were list in the current frame    
     return lost_points
 
 def find_lost_points2(meas_last, meas_now, n_inds):
@@ -267,48 +275,52 @@ def find_lost_points2(meas_last, meas_now, n_inds):
     -------
     lost_points = list of points from meas_last which are considered as lost
     """
+ 
+    #if 1 animal tracked it has been lost
+    if n_inds == 1:
+        lost_points = meas_last
+    else:
+        lowest_cost = np.inf #initial cost value
     
-    lowest_cost = np.inf #initial cost value
-    
-    #generate list of all subsets from meas_last with the length of meas_now containing indices of objects and their positions
-    all_subsets = list(itertools.combinations(enumerate(meas_last), len(meas_now)))
+        #generate list of all subsets from meas_last with the length of meas_now containing indices of objects and their positions
+        all_subsets = list(itertools.combinations(enumerate(meas_last), len(meas_now)))
 
-    #split up all_subsets into a list of lists with the object indices per subset
-    indices = []
-    indices_subset = []
-    for subset in all_subsets:
-        for position in subset:
-            indices_subset.append(position[0])
-        indices.append(indices_subset)
+        #split up all_subsets into a list of lists with the object indices per subset
+        indices = []
         indices_subset = []
+        for subset in all_subsets:
+            for position in subset:
+                indices_subset.append(position[0])
+            indices.append(indices_subset)
+            indices_subset = []
     
-    #split up all_subsets into a list of lists with the object coordinates per subset
-    positions = []
-    positions_subset = []
-    for subset in all_subsets:
-        for position in subset:
-            positions_subset.append(list(position)[1])
-        positions.append(positions_subset)
+        #split up all_subsets into a list of lists with the object coordinates per subset
+        positions = []
         positions_subset = []
+        for subset in all_subsets:
+            for position in subset:
+                positions_subset.append(list(position)[1])
+            positions.append(positions_subset)
+            positions_subset = []
     
-    #iterate over position subsets
-    for i in np.arange(0, len(positions)):
-        subset = positions[i]
-        idx = indices[i]
-        cost = cdist(meas_last, subset) #create cost function
-        row_ind, col_ind = linear_sum_assignment(cost) #hungarian algorithm
-        if cost[row_ind, col_ind].sum() < lowest_cost: #update best_idx if the costs are lower than before
-            lowest_cost = cost[row_ind, col_ind].sum()
-            best_idx = np.array(idx)
+        #iterate over position subsets
+        for i in np.arange(0, len(positions)):
+            subset = positions[i]
+            idx = indices[i]
+            cost = cdist(meas_last, subset) #create cost function
+            row_ind, col_ind = linear_sum_assignment(cost) #hungarian algorithm
+            if cost[row_ind, col_ind].sum() < lowest_cost: #update best_idx if the costs are lower than before
+                lowest_cost = cost[row_ind, col_ind].sum()
+                best_idx = np.array(idx)
 
-    #find points which are not in the best subset and store them in lost_points
-    lost_points = []
-    for i in np.arange(0, n_inds):
-        if i not in best_idx:
-            lost_points.append((meas_last[i]))
+        #find points which are not in the best subset and store them in lost_points
+        lost_points = []
+        for i in np.arange(0, n_inds):
+            if i not in best_idx:
+                lost_points.append((meas_last[i]))
     return lost_points
 
-def assign_lost_points1(meas_now, lost_points): 
+def assign_lost_points1(meas_now, lost_points, n_inds): 
     """
     This function takes the lost_points in the last frame identified previously and tries to make statements about them in
     the current frame. First, it assumes that two blobs merged and the lost_points are contained in the closest contours.
@@ -325,6 +337,9 @@ def assign_lost_points1(meas_now, lost_points):
     -------
     extended_meas_now = meas_now plus calculated positions for lost objects
     """
+    
+    if n_inds == 1:
+        meas_now = lost_points
     
     #find closest contours for lost_points
     dist_matrix = cdist(lost_points, meas_now)
@@ -355,8 +370,12 @@ def assign_lost_points2(meas_now, lost_points):
     -------
     extended_meas_now = meas_now plus calculated positions for lost objects
     """
-    extended_meas_now = np.append(meas_now, lost_points, axis = 0) 
-    #append the centroid of the lost individuals from the last frame to the current frame
+    
+    if len(meas_now) == 0:
+        extended_meas_now = lost_points
+    else:
+        extended_meas_now = np.append(meas_now, lost_points, axis = 0) 
+        #append the centroid of the lost individuals from the last frame to the current frame
     return extended_meas_now
 
 def reorder_and_draw(final, colours, n_inds, col_ind, meas_now, df, fr_no, colour_ignored_area):
@@ -406,8 +425,8 @@ def reorder_and_draw(final, colours, n_inds, col_ind, meas_now, df, fr_no, colou
     #if mot == False:
     if n_inds == 1:
         for i in range(len(meas_now)):
-            if colours[i%4] == (0,0,255):
-                cv2.circle(final, tuple([int(x) for x in meas_now[i]]), 5, colours[i%4], -1, cv2.LINE_AA)
+            #if colours[i%4] == (0,0,255):
+            cv2.circle(final, tuple([int(x) for x in meas_now[i]]), 5, colours[i%n_inds], -1, cv2.LINE_AA)
     else:
         for i in range(n_inds):
             cv2.circle(final, tuple([int(x) for x in meas_now[i]]), 5, colours[i%n_inds], -1, cv2.LINE_AA)
